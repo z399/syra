@@ -45,10 +45,10 @@ pacstrap -K /mnt base base-devel linux-lts linux-firmware $UC nvim efibootmgr zs
 genfstab -U /mnt >> /mnt/etc/fstab
 
 # Copy chroot script
-curl -LO https://raw.githubusercontent.com/z399/ar/main/ar2
-cp ar2 /mnt/ar2 
-chmod +x /mnt/ar2 
-arch-chroot /mnt bash ar2 && rm /mnt/ar2
+curl -LO https://raw.githubusercontent.com/z399/syra/main/syra2
+cp syra2 /mnt/syra2
+chmod +x /mnt/syra2
+arch-chroot /mnt bash syra2 && rm /mnt/syra2
 
 # Exit
 umount -R /mnt
