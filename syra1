@@ -1,0 +1,56 @@
+#!/bin/bash
+
+# CONFIG
+lsblk
+read -p "Disk (e.g. nvme0n1,sda): " DISK
+while :; do
+  read -s -p "LUKS Password: " P; echo
+  read -s -p "Confirm: " C; echo
+  [ "$P" = "$C" ] && break || echo "Mismatch" >&2
+done
+CRYPTPASS="$P"
+
+
+# Partition
+sgdisk -Z /dev/$DISK
+sgdisk -n1:0:+512M -t1:ef00 /dev/$DISK
+sgdisk -n2:0:0     -t2:8309 /dev/$DISK
+partprobe /dev/$DISK
+udevadm settle
+lsblk /dev/$DISK
+read -p "EFI Partition (sda1, nvme0n1p1): " EFI
+read -p "Root Partition (sda2,nvme0n1p2): " ROOT
+
+# Encrypt
+echo -n "$CRYPTPASS" | cryptsetup luksFormat --type luks1 /dev/$ROOT -
+echo -n "$CRYPTPASS" | cryptsetup open /dev/$ROOT cryptroot -
+
+# Format
+mkfs.fat -F32 /dev/$EFI
+mkfs.ext4 /dev/mapper/cryptroot
+
+# Mount
+mount /dev/mapper/cryptroot /mnt
+mkdir -p /mnt/boot
+mount /dev/$EFI /mnt/boot
+
+# Install
+CPU=$(lscpu | grep "Model name")
+[[ "$CPU" == *Intel* ]] && UC="intel-ucode" || UC="amd-ucode"
+
+pacman-key --init
+pacman-key --populate archlinux
+pacman -Sy --noconfirm archlinux-keyring
+pacstrap -K /mnt base base-devel linux-lts linux-firmware $UC nvim efibootmgr zsh networkmanager
+genfstab -U /mnt >> /mnt/etc/fstab
+
+# Copy chroot script
+curl -LO https://raw.githubusercontent.com/z399/ar/main/ar2
+cp ar2 /mnt/ar2 
+chmod +x /mnt/ar2 
+arch-chroot /mnt bash ar2 && rm /mnt/ar2
+
+# Exit
+umount -R /mnt
+cryptsetup close cryptroot
+echo "Installation DONE. Reboot."
