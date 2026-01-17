@@ -36,10 +36,19 @@ if [[ "$SWAPFILE_YN" =~ ^[Yy]$ ]]; then
   echo "/swapfile none swap defaults,pri=10 0 0" >> /etc/fstab
 fi
 
-# ─── Kernel + GRUB Config ───
+# ─── Kernel + SystemD-boot Config ───
 sed -i 's/^HOOKS=.*/HOOKS=(base systemd autodetect keyboard sd-vconsole modconf block sd-encrypt filesystems fsck)/' /etc/mkinitcpio.conf
 mkinitcpio -p linux-lts
+
 bootctl --path=/boot install
+
+# ─── UEFI NVRAM ENTRY ───
+ESP_SRC=$(findmnt -n -o SOURCE /boot)
+ESP_DISK=$(lsblk -no PKNAME "$ESP_SRC")
+ESP_PART=$(lsblk -no PARTNUM "$ESP_SRC")
+
+efibootmgr -c -d /dev/$ESP_DISK -p $ESP_PART -L "Linux Boot Manager" -l '\EFI\systemd\systemd-bootx64.efi'
+
 LUKS_UUID=$(cryptsetup luksUUID /dev/$LUKS_PART)
 
 cat <<EOF > /boot/loader/loader.conf
