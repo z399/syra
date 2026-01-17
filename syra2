@@ -4,6 +4,7 @@ read -p "Hostname: " HOST
 read -p "Username: " USER
 read -p "TimeZone (e.g. UTC): " TZ
 lsblk
+read -p "EFI Partition (e.g. nvme0n1p1 or sda1): " ESP
 read -p "Root Partition (e.g. sda2, nvme2): " LUKS_PART
 read -p "Create fallback swapfile? [y/N]: " SWAPFILE_YN
 read -p "Swapfile size in GB (if enabled): " SWAPSIZE
@@ -43,11 +44,13 @@ mkinitcpio -p linux-lts
 bootctl --path=/boot install
 
 # ─── UEFI NVRAM ENTRY ───
-ESP_SRC=$(findmnt -n -o SOURCE /boot)
-ESP_DISK=$(lsblk -no PKNAME "$ESP_SRC")
-ESP_PART=$(lsblk -no PARTNUM "$ESP_SRC")
+ESP_NUM=$(echo "$ESP" | grep -o '[0-9]\+$')
+ESP_DISK="/dev/$(echo "$ESP" | sed "s/$ESP_NUM\$//")"
 
-efibootmgr -c -d /dev/$ESP_DISK -p $ESP_PART -L "Linux Boot Manager" -l '\EFI\systemd\systemd-bootx64.efi'
+efibootmgr -c -d $ESP_DISK -p $ESP_NUM -L "Linux Boot Manager" -l '\EFI\systemd\systemd-bootx64.efi'
+
+mkdir -p /boot/EFI/BOOT
+cp /boot/EFI/systemd/systemd-bootx64.efi /boot/EFI/BOOT/BOOTX64.EFI
 
 LUKS_UUID=$(cryptsetup luksUUID /dev/$LUKS_PART)
 
@@ -69,8 +72,6 @@ initrd  /initramfs-linux-lts.img
 options rd.luks.uuid=$LUKS_UUID rd.luks.name=$LUKS_UUID=cryptroot root=/dev/mapper/cryptroot rw
 EOF
 
-mkdir -p /boot/EFI/BOOT
-cp /boot/EFI/systemd/systemd-bootx64.efi /boot/EFI/BOOT/BOOTX64.EFI
 
 # ─── USER SETUP ─────
 useradd -mG wheel -s /bin/zsh $USER
