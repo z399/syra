@@ -1,0 +1,76 @@
+#!/bin/bash
+
+read -p "Hostname: " HOST
+read -p "Username: " USER
+read -p "TimeZone (e.g. UTC): " TZ
+lsblk
+read -p "Root Partition (e.g. sda2, nvme2): " LUKS_PART
+read -p "Create fallback swapfile? [y/N]: " SWAPFILE_YN
+read -p "Swapfile size in GB (if enabled): " SWAPSIZE
+
+echo "$HOST" > /etc/hostname
+ln -sf /usr/share/zoneinfo/$TZ /etc/localtime
+
+echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
+locale-gen
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+
+# ─── ZRAM Setup ───────────────────────
+echo "Enabling ZRAM..."
+pacman -S --noconfirm zram-generator
+
+mkdir -p /etc/systemd
+cat <<EOF > /etc/systemd/zram-generator.conf
+[zram0]
+zram-size = ram / 2
+compression-algorithm = zstd
+swap-priority = 100
+EOF
+
+# ─── Optional Fallback Swapfile ─────────
+if [[ "$SWAPFILE_YN" =~ ^[Yy]$ ]]; then
+  echo "Creating fallback swapfile..."
+  fallocate -l ${SWAPSIZE}G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  echo "/swapfile none swap defaults,pri=10 0 0" >> /etc/fstab
+fi
+
+# ─── Kernel + GRUB Config ───
+sed -i 's/^HOOKS=.*/HOOKS=(base systemd autodetect keyboard sd-vconsole modconf block sd-encrypt filesystems fsck)/' /etc/mkinitcpio.conf
+mkinitcpio -p linux-lts
+bootctl --path=/boot install
+LUKS_UUID=$(cryptsetup luksUUID /dev/$LUKS_PART)
+
+cat <<EOF > /boot/loader/loader.conf
+default arch.conf
+timeout 5
+editor no
+EOF
+
+UCODE=""
+[ -f /boot/intel-ucode.img ] && UCODE="initrd  /intel-ucode.img"
+[ -f /boot/amd-ucode.img ] && UCODE="initrd  /amd-ucode.img"
+
+cat <<EOF > /boot/loader/entries/arch.conf
+title   Arch Linux (LTS)
+linux   /vmlinuz-linux-lts
+$UCODE
+initrd  /initramfs-linux-lts.img
+options rd.luks.uuid=$LUKS_UUID rd.luks.name=$LUKS_UUID=cryptroot root=/dev/mapper/cryptroot rw
+EOF
+
+mkdir -p /boot/EFI/BOOT
+cp /boot/EFI/systemd/systemd-bootx64.efi /boot/EFI/BOOT/BOOTX64.EFI
+
+# ─── USER SETUP ─────
+useradd -mG wheel -s /bin/zsh $USER
+echo "Set root password:"
+passwd
+echo "Set $USER password:"
+passwd $USER
+
+echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel
+chmod 440 /etc/sudoers.d/wheel
+systemctl enable NetworkManager
+exit
