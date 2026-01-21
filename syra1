@@ -22,7 +22,7 @@ read -p "EFI Partition (sda1, nvme0n1p1): " EFI
 read -p "Root Partition (sda2,nvme0n1p2): " ROOT
 
 # Encrypt
-echo -n "$CRYPTPASS" | cryptsetup luksFormat --type luks1 /dev/$ROOT -
+echo -n "$CRYPTPASS" | cryptsetup luksFormat --type luks2 /dev/$ROOT -
 echo -n "$CRYPTPASS" | cryptsetup open /dev/$ROOT cryptroot -
 
 # Format
