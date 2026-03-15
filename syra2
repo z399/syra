@@ -1,26 +1,37 @@
 #!/bin/bash
+set -e
 
+# ─── User Input ───────────────────────
 read -p "Hostname: " HOST
-read -p "Username: " USER
+read -p "Username: " USERNAME
 read -p "TimeZone (e.g. UTC): " TZ
 lsblk
 read -p "EFI Partition (e.g. nvme0n1p1 or sda1): " ESP
-read -p "Root Partition (e.g. sda2, nvme2): " LUKS_PART
+read -p "Root Partition (e.g. sda2, nvme0n1p2): " LUKS_PART
+
 read -p "Create fallback swapfile? [y/N]: " SWAPFILE_YN
-read -p "Swapfile size in GB (if enabled): " SWAPSIZE
+if [[ "$SWAPFILE_YN" =~ ^[Yy]$ ]]; then
+  read -p "Swapfile size in GB: " SWAPSIZE
+fi
 
+# ─── Validation ───────────────────────
+[ -f "/usr/share/zoneinfo/$TZ" ] || { echo "Invalid timezone: $TZ"; exit 1; }
+[ -b "/dev/$ESP" ]               || { echo "Invalid EFI partition: $ESP"; exit 1; }
+[ -b "/dev/$LUKS_PART" ]         || { echo "Invalid root partition: $LUKS_PART"; exit 1; }
+
+# ─── System Config ────────────────────
 echo "$HOST" > /etc/hostname
+printf "127.0.0.1 localhost\n::1 localhost\n127.0.1.1 %s.localdomain %s\n" "$HOST" "$HOST" > /etc/hosts
 ln -sf /usr/share/zoneinfo/$TZ /etc/localtime
-
+hwclock --systohc
 echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
 locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
+echo "KEYMAP=us" > /etc/vconsole.conf
 
 # ─── ZRAM Setup ───────────────────────
 echo "Enabling ZRAM..."
-pacman -S --noconfirm zram-generator
-
-mkdir -p /etc/systemd
+pacman -Syu --noconfirm zram-generator
 cat <<EOF > /etc/systemd/zram-generator.conf
 [zram0]
 zram-size = ram / 2
@@ -28,30 +39,34 @@ compression-algorithm = zstd
 swap-priority = 100
 EOF
 
-# ─── Optional Fallback Swapfile ─────────
+# ─── Optional Fallback Swapfile ───────
 if [[ "$SWAPFILE_YN" =~ ^[Yy]$ ]]; then
   echo "Creating fallback swapfile..."
   fallocate -l ${SWAPSIZE}G /swapfile
   chmod 600 /swapfile
   mkswap /swapfile
+  swapon /swapfile
   echo "/swapfile none swap defaults,pri=10 0 0" >> /etc/fstab
 fi
 
-# ─── Kernel + SystemD-boot Config ───
+# ─── Kernel + Initramfs ───────────────
 sed -i 's/^HOOKS=.*/HOOKS=(base systemd autodetect keyboard sd-vconsole modconf block sd-encrypt filesystems fsck)/' /etc/mkinitcpio.conf
+grep -q "sd-encrypt" /etc/mkinitcpio.conf || { echo "HOOKS sed failed"; exit 1; }
 mkinitcpio -p linux-lts
 
+# ─── Systemd-boot Install ─────────────
 bootctl --path=/boot install
 
-# ─── UEFI NVRAM ENTRY ───
-ESP_NUM=$(echo "$ESP" | grep -o '[0-9]\+$')
-ESP_DISK="/dev/$(echo "$ESP" | sed "s/$ESP_NUM\$//")"
+# ─── EFI Partition Info ───────────────
+ESP_DISK="/dev/$(lsblk -no pkname /dev/$ESP)"
+ESP_NUM=$(cat /sys/class/block/$ESP/partition)
 
-efibootmgr -c -d $ESP_DISK -p $ESP_NUM -L "Linux Boot Manager" -l '\EFI\systemd\systemd-bootx64.efi'
-
+# ─── UEFI NVRAM Entry ─────────────────
+efibootmgr -c -d "$ESP_DISK" -p "$ESP_NUM" -L "Linux Boot Manager" -l '\EFI\systemd\systemd-bootx64.efi'
 mkdir -p /boot/EFI/BOOT
 cp /boot/EFI/systemd/systemd-bootx64.efi /boot/EFI/BOOT/BOOTX64.EFI
 
+# ─── Boot Loader Config ───────────────
 LUKS_UUID=$(cryptsetup luksUUID /dev/$LUKS_PART)
 
 cat <<EOF > /boot/loader/loader.conf
@@ -62,25 +77,35 @@ EOF
 
 UCODE=""
 [ -f /boot/intel-ucode.img ] && UCODE="initrd  /intel-ucode.img"
-[ -f /boot/amd-ucode.img ] && UCODE="initrd  /amd-ucode.img"
+[ -f /boot/amd-ucode.img ]   && UCODE="initrd  /amd-ucode.img"
 
 cat <<EOF > /boot/loader/entries/arch.conf
 title   Arch Linux (LTS)
 linux   /vmlinuz-linux-lts
 $UCODE
 initrd  /initramfs-linux-lts.img
+options rd.luks.uuid=$LUKS_UUID rd.luks.name=$LUKS_UUID=cryptroot root=/dev/mapper/cryptroot rw quiet
+EOF
+
+cat <<EOF > /boot/loader/entries/arch-fallback.conf
+title   Arch Linux (LTS Fallback)
+linux   /vmlinuz-linux-lts
+$UCODE
+initrd  /initramfs-linux-lts-fallback.img
 options rd.luks.uuid=$LUKS_UUID rd.luks.name=$LUKS_UUID=cryptroot root=/dev/mapper/cryptroot rw
 EOF
 
-
-# ─── USER SETUP ─────
-useradd -mG wheel -s /bin/zsh $USER
+# ─── User Setup ───────────────────────
+useradd -mG wheel -s /bin/zsh $USERNAME
 echo "Set root password:"
 passwd
-echo "Set $USER password:"
-passwd $USER
-
-echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/wheel
+echo "Set $USERNAME password:"
+passwd $USERNAME
+echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
 chmod 440 /etc/sudoers.d/wheel
+
+# ─── Services ─────────────────────────
 systemctl enable NetworkManager
+
+echo "Chroot setup DONE."
 exit
