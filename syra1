@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# CONFIG
+# ───CONFIG ──────────────────────────
 lsblk
 read -p "Disk (e.g. nvme0n1,sda): " DISK
 while :; do
@@ -11,7 +11,7 @@ done
 CRYPTPASS="$P"
 
 
-# Partition
+# ───Partition ──────────────────────────
 sgdisk -Z /dev/$DISK
 sgdisk -n1:0:+512M -t1:ef00 /dev/$DISK
 sgdisk -n2:0:0     -t2:8309 /dev/$DISK
@@ -21,36 +21,44 @@ lsblk /dev/$DISK
 read -p "EFI Partition (sda1, nvme0n1p1): " EFI
 read -p "Root Partition (sda2,nvme0n1p2): " ROOT
 
-# Encrypt
+# ───Encrypt ──────────────────────────
 echo -n "$CRYPTPASS" | cryptsetup luksFormat --type luks2 /dev/$ROOT -
 echo -n "$CRYPTPASS" | cryptsetup open /dev/$ROOT cryptroot -
 
-# Format
+# ───Format ──────────────────────────
 mkfs.fat -F32 /dev/$EFI
 mkfs.ext4 /dev/mapper/cryptroot
 
-# Mount
+# ───Mount ──────────────────────────
 mount /dev/mapper/cryptroot /mnt
 mkdir -p /mnt/boot
 mount /dev/$EFI /mnt/boot
 
-# Install
+# ───Hardware ──────────────────────────
 CPU=$(lscpu | grep "Model name")
 [[ "$CPU" == *Intel* ]] && UC="intel-ucode" || UC="amd-ucode"
 
+# ─── Mirrors ──────────────────────────
+cat > /etc/pacman.d/mirrorlist << 'EOF'
+Server = https://mirror.freedif.org/archlinux/$repo/os/$arch
+Server = https://mirrors.dotsrc.org/archlinux/$repo/os/$arch
+Server = https://mirrors.kernel.org/archlinux/$repo/os/$arch
+EOF
+
+# ─── Install ──────────────────────────
 pacman-key --init
 pacman-key --populate archlinux
 pacman -Sy --noconfirm archlinux-keyring
 pacstrap -K /mnt base base-devel linux-lts linux-firmware $UC nvim efibootmgr zsh networkmanager
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# Copy chroot script
+# ───Copy chroot script ──────────────────────────
 curl -LO https://raw.githubusercontent.com/z399/syra/main/syra2
 cp syra2 /mnt/syra2
 chmod +x /mnt/syra2
 arch-chroot /mnt bash syra2 && rm /mnt/syra2
 
-# Exit
+# ───Exit ──────────────────────────
 umount -R /mnt
 cryptsetup close cryptroot
 echo "Installation DONE. Reboot."
