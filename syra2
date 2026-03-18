@@ -81,7 +81,7 @@ LUKS_UUID=$(cryptsetup luksUUID /dev/$LUKS_PART)
 
 cat <<EOF > /boot/loader/loader.conf
 default arch.conf
-timeout 5
+timeout 20
 editor no
 EOF
 
